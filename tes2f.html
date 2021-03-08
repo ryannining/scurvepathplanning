@@ -1,0 +1,1011 @@
+
+<head>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<html>
+<body>
+<table cellpadding=10 width=1000px><tr valign=top><td>
+  <table>
+  <tr><td>Time step<td><input id=tst size=4 value=0.005>
+  <tr><td>Velocity<td><input id=ifeed size=4 value=120>
+  <tr><td>Accel<td><input id=iacc size=4 value=200>
+  <tr><td>Max Acl<td><input id=iacx size=4 value=5>
+  <tr><td>Jerk<td><input id=ijerk size=4 value=1500>
+  <tr><td>Corner<td><input id=icorner size=4 value=40>
+  <tr><td>Path<td><select id=idemo>
+	<option value="line" >Line</option>
+	<option value="box">Box</option>
+	<option value="circle" selected >Circle</option>
+	</select>
+  <tr><td colspan=2><button onclick="dodemo()">Run demo</button>
+  
+  </table>	
+<td>  
+  <canvas style="background:white" id=drw width="200" height="500"></canvas>
+</td><td width=80%>
+<div id=drw1 style="width:100%; height:500px"></div>
+</td></table>
+  <script>
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function mround(x) {
+	return Math.round(x * 100.0) / 100.0;
+}
+
+function getvalue(el) {
+	if ($(el)==undefined)return "";
+	if (el=="gcode")return editorgcode.getValue();
+    else return $(el).value;
+}
+
+var micros=Date.now;
+var c = document.getElementById("drw");
+var ctx = c.getContext("2d");
+zprintf=console.log;
+function PSTR(x){return x;}
+var float=parseFloat;
+function fmax(a,b){return (a>=b)?a:b;}
+function fmin(a,b){return (a>=b)?b:a;}
+function InvSqrt(f) {return 1.0/Math.sqrt(f);}
+
+function xInvSqrt(n) {return stepdiv2*(n>0.0625?InvSqrt(n):4);}
+function zInvSqrt(n) {return stepdiv2/n;}
+//function xInvSqrt(n) {return Math.round(Math.sqrt(n));}
+function sqr(n) {return n*n;}
+
+function max(a,b){return a>b?a:b;}
+function min(a,b){return a<b?a:b;}
+function sqr(a){return a*a;}
+function qub(a){return a*a*a;}
+function int(a){return Math.floor(a);}
+fabs=Math.abs;
+print=console.log;
+
+var vv=[];
+var ddd=[];
+var CLOCKCONSTANT=80000000;
+var STEPFREQ=50000;
+var STEPCLOCK=Math.round(CLOCKCONSTANT/STEPFREQ);
+var rampv=1;
+var minVel=1;
+var head=0;
+var tail=0;
+var NUMBUFFER=30;
+var head1=0;
+var tail1=0;
+var NUMBUFFER1=NUMBUFFER*3; // at least must be 3x NUMBUFFER
+var move=[];
+var move1=[];
+var isG0;
+var m,nm;
+var f=0;
+var x1=0;
+var y1=0;
+var z1=0;
+var e1=0;
+
+var maxf=[100,100,100,100,0];
+maxf[4]=max(maxf[0],max(max(maxf[1],maxf[2]),maxf[3]));
+var stepmm=27.5;
+var accel=40;
+var jerk=5*accel;
+var zaccel=accel;
+var mvaccel=accel;
+var xycorner=35;
+var zcorner=xycorner;
+var labs=Math.abs;
+var fabs=Math.abs;
+
+var laxis;
+var fastaxis;
+var totalstep;
+var oacup,acup;
+var oacdn,acdn;
+var ta;
+var stepdiv,stepdiv2;
+var nextmicros;
+var mctr2,mctr;
+var nextdly;
+var ldelay=0;
+
+var dlp=0;
+var cmd0=0;
+var cmddelay=[0];
+var cmdhead=0;
+var cmdtail=0;
+var lastmm=[0,0,0];
+var currmm=[0,0,0];
+var mmdis=[0,0,0];
+var mcx=[0,0,0];
+var bsdx=[0,0,0];
+var sx=[0,0,0];
+
+/// command buffer
+var NUMCMDBUF=100000;
+function prevbuffm(x) {return ((x) > 0 ? (x) - 1 : NUMCMDBUF-1);}
+function nextbuffm(x) {return ((x) < NUMCMDBUF-1 ? (x) + 1 : 0);}
+function prevbuffm1(x) {return ((x) > 0 ? (x) - 1 : NUMCMDBUF1-1);}
+
+for (var i=0;i<NUMBUFFER;i++){move.push({});}
+for (var i=0;i<NUMBUFFER1;i++){move1.push({});}
+
+//for (var i=0;i<NUMCMDBUF;i++){cmddelay.push(0);}
+
+var cmhead = 0;
+var cmtail = 0;
+var cmcmd;
+var cmbit = 0;
+var cmdlaserval = 0;
+
+var mo = 0;
+function cmdfull() {return nextbuffm(cmhead)==cmtail;}
+function cmdnotfull() {return nextbuffm(cmhead)!=cmtail;}
+function cmdempty () {return cmhead==cmtail;}
+
+var nextok = 0;
+var laserwason = 0;
+
+var sendwait = 0;
+
+var maincmdlaserval = 0;
+
+function pushcmd()
+{
+
+
+  // if move cmd, and no motor move, save the delay
+//  if ( (cmd0 & 1) && !(cmd0 & (15 << 1))) {
+//    ldelay += cmd0 >> 5;
+//  } else {
+  if ( (cmd0 & 1)) {
+    ldelay += cmd0 >> 5;
+    cmhead = nextbuffm(cmhead);
+    if (cmd0 & 1)cmd0 += (ldelay << 5);
+    //cmddelay[cmhead] = cmd0;
+    cmddelay.push(cmd0);
+    ldelay = 0;
+  }
+
+}
+
+function pullcmd()
+{
+	cmhead = prevbuffm(cmhead);
+}
+
+function newdircommand(laserval)
+{
+  // change dir command
+  //cmd0 = 0;//DIRDELAY << 6;
+  cmd0 = (laserval << 9);
+  if (sx[0] > 0)cmd0 |= 2;
+  if (sx[1] > 0)cmd0 |= 8;
+  if (sx[2] > 0)cmd0 |= 32;
+  if (sx[3] > 0)cmd0 |= 128;
+  // TO know whether axis is moving
+  if (bsdx[0] > 0)cmd0 |= 4;
+  if (bsdx[1] > 0)cmd0 |= 16;
+  if (bsdx[2] > 0)cmd0 |= 64;
+  if (bsdx[3] > 0)cmd0 |= 256;
+  ldelay = 0;
+  pushcmd();
+
+}
+
+
+
+function bufflen() {return  head >= tail ? head - tail : (NUMBUFFER + head) - tail;} // 5+0 - 4
+function nextbuff(x) {return (x) < NUMBUFFER-1 ? (x) + 1 : 0;}
+function prevbuff(x) {return ((x) > 0 ? (x) - 1 : NUMBUFFER-1);}
+
+function bufflen1() {return  head1 >= tail1 ? head1 - tail1 : (NUMBUFFER1 + head1) - tail1;} // 5+0 - 4
+function nextbuff1(x) {return (x) < NUMBUFFER1-1 ? (x) + 1 : 0;}
+function prevbuff1(x) {return ((x) > 0 ? (x) - 1 : NUMBUFFER1-1);}
+
+function copy(a,b){
+  for (var i=0;i<b.length;i++){
+    a[i]=b[i];
+  }
+}
+
+function int(x){return Math.floor(x);}
+function max(a,b){return (a>=b)?a:b;}
+function min(a,b){return (a<=b)?a:b;}
+function abs(a){return Math.abs(a);}
+var sqrt=Math.sqrt;
+function sqr2(x){return x*x;}
+
+
+
+
+var MINCORNERSPEED=0.1;
+var lastf=0;
+var curru=[0,0,0,0,0];
+var prevu=[0,0,0,0,0];
+var tailok=0;
+var tailok1=0;
+
+// float
+
+var scurve=0;
+
+var has1,has2,has3,has4,has5,has6,has7;
+var s1,s2,s3,s4,s5,s6,s7;
+var vjerk1,vjerk7,vi,vc,ve;
+var a1x,a1,a2,as3,as7,ja,T,V,S,Sdest,tstep,tstepS;
+// int
+var sg,ok;
+var prevacc=0;
+var nextacc=0;
+var curracc=0;
+
+function ramplenq(v0,v1,stepa) {
+	return (v1-v0)*stepa;
+}	
+
+function ramplenq2(v0,v1,stepa) {
+	return 0.5*tosteps*(v1-v0)*stepa;
+}	
+
+function speedat(v0,a,s) {return (a * s  + v0);}
+
+var rampup,rampdown,tosteps;
+var stepa,acdn,acup;
+var x11,y11,z11;
+x11=y11=z11=0;
+laccel1=0;
+var tail2=-1;
+var head2=-1;
+
+
+
+
+
+var accelid=0;
+var mvnowok=0;
+function preparejerk(jerk){
+    // calculate from tail2 to head2
+    // totaltime = (vend-vstart)/accel
+    // jerktime = accel/jerk
+	mvnowok=1;
+    m0=m1=move1[tail2];
+    m2=move1[prevbuff1(head2)];
+    m1.fex=m2.fe;
+    
+    var tacm=0;
+    t=tail2;
+    accelid++;
+    while (t!=head2){
+        m1=move1[t];
+        m1.accelid=accelid;
+        m1.disend=m1.dis+tacm;
+        m1.ok=1;
+        tacm+=m1.dis;
+        t=nextbuff1(t);
+    }
+    m0.disx=m1.disend;
+}
+function addmove1(fs,fe,accel,dis,m){
+	if (dis<0.00001)return 0;
+    cm=move1[nextbuff1(head1)];
+    cm.accel=accel; 
+    cm.disx=cm.dis=dis;
+    r=dis/m.dis; // ratio of this segment to total segment
+    cm.mmdis=[m.mmdis[0]*r,m.mmdis[1]*r,m.mmdis[2]*r]; // calculate the XYZ distance from ratio
+    cm.x11=x11+m.x1; // calculate the start coordinate
+    cm.y11=y11+m.y1;
+    cm.z11=z11+m.z1;
+    x11+=cm.mmdis[0]; // save the current position for next
+    y11+=cm.mmdis[1];
+    z11+=cm.mmdis[2];
+    cm.x12=x11+m.x1; // calculate the start coordinate
+    cm.y12=y11+m.y1;
+    cm.z12=z11+m.z1;
+    cm.accelid=0;
+        
+    cm.fs=fs;
+    cm.fe=fe;
+    cm.fex=fe;
+    cm.ok=accel==0?1:0; // if cruising then just mark as OK, no need jerk calculation
+    cm.status=m.status; 
+    cm.faxis=m.faxis;  	
+    // increase head1
+    head1=nextbuff1(head1);
+    
+    // detect change in acceleration direction and make notes
+    // from where it start and end, then calculate total time
+    //
+    
+    if (laccel1!=accel){
+        if (tail2==-1)tail2=head1;
+        else {
+            head2=head1;
+            // calculate jerk position from tail2 to head2
+            if (laccel1)preparejerk(jerk);
+            //if (accel==0)laccel1=-1000000;
+            tail2=head1;
+        }
+        laccel1=accel;
+    }
+    return dis;
+}
+function prepareall(){
+    if (tail2==-1)return;
+    head2=nextbuff(head1);
+    // calculate jerk position from tail2 to head2
+    preparejerk(jerk);
+    tail2=-1;
+}
+function prepareramp(bpos)
+{
+
+    var m = move[bpos];
+
+	// trapezoid ramps up /down
+	var ru, rd;
+	ru = rd = 0;
+	accel2=2*accel;
+	stepa = 1.0 / (accel2);
+
+	ru=ramplenq(m.fs, m.fn, stepa);
+	rd=ramplenq(m.fe, m.fn, stepa);
+
+
+	if (ru<0.001)ru=0;
+	if (rd<0.001)rd=0;
+	
+	if (ru + rd > m.dis) {
+		// if crossing and have rampup
+		var r = ((ru + rd) - m.dis) / 2;
+		ru -= r;
+		rd -= r;
+		if (ru < 0.001)ru = 0;
+		if (rd < 0.001)rd = 0;
+		if (rd > m.dis)rd = m.dis;
+		if (ru > m.dis)ru = m.dis;
+		m.fn = speedat(m.fs, accel2, ru);
+
+		//    if (rd== 0)next->fs = m.fn;
+	}
+	
+	
+	// now lets separate the 3 part of this path into new buffer1
+	x11=y11=z11=0;
+	
+	fs=Math.sqrt(m.fs);
+	fn=Math.sqrt(m.fn);
+	fe=Math.sqrt(m.fe);
+	
+	
+	if (ru>0)ru=addmove1(fs,fn,accel,ru,m);
+	if ((cru=m.dis-(ru+rd))>0)cru=addmove1(fn,fn,0,cru,m);
+	if ((rd=m.dis-(cru+ru))>0)rd=addmove1(fn,fe,-accel,rd,m);
+    m.status |= 4;
+}
+
+function deltaV2(s){
+    return 2*accel*s;
+}
+
+function backforward()
+{
+// now back planner
+    h=head;//
+    //h=prevbuff(head);
+    if (h==tailok) {
+        return 0;
+    }
+
+    var next;
+    var curr = 0;
+    while (1) {
+        next=curr;
+		fs=next?next.fs:MINCORNERSPEED;
+        curr=move[h];
+		curr.fe=fs;
+        if (curr.fs!=curr.maxs) {
+			curr.fs=min(fs+curr.delta,curr.maxs); // maximum speed from next start 
+        	//curr.fn=curr.fs;
+        }
+        
+        h=prevbuff(h);
+		if (h==tailok)break;
+    }
+
+// forward
+    h=tailok;
+	
+	next=move[h];
+    h=nextbuff(h);
+    while (h!=head) {
+
+        curr=next;
+        next=move[h];
+		curr.fe=next.fs;
+        if (curr.fs<next.fs) { // if this start speed is less then next start /
+            fs=curr.fs+curr.delta; // maximum speed at end
+            if (fs<next.fs) { // if next start is less than this maximum speed , then its final
+                next.fs=fs;
+				curr.fe=fs;
+				//curr.fn=fe;
+                tailok=prevbuff(h);
+            }
+            curr.fn=max(curr.fe,min(fs,curr.fn));
+        }
+        if (next.fs==next.maxs) tailok=prevbuff(h);
+        h=nextbuff(h);
+
+    }
+
+}
+
+
+function planner(h){
+  curr=move[h];
+  scale=1;
+  copy(prevu,curru);
+  curru[4] = 1;
+  for (var i=0;i<3;i++){
+    curru[i]=0;
+    if (curr.dx[i]!=0){
+      cdx = (curr.fn) * mmdis[i];
+      if ((i != 3)) {
+        scale2 = (maxf[i]) * curr.dis / fabs(cdx);
+        if (scale2 < scale) scale = scale2;
+      }
+      // if Z then need to scale the acceleration too
+      if (i == 2) {
+        //scalea = zaccel * curr.dis / fabs(accel * mmdis[i]);
+        //if (scalea < 1)m.accel *= scalea;
+      }
+      curru[i] = mmdis[i] / curr.dis;
+    }
+  }
+  var ucorner = xycorner;//* scale;
+  curr.fn*=scale;
+  curr.fn*=curr.fn;
+  
+
+  max_f = MINCORNERSPEED;
+  if (bufflen()>1) {
+
+     var junc_cos = -prevu[0] * curru[0] - prevu[1] * curru[1] - prevu[2] * curru[2];
+    if (junc_cos > 0.999999) {
+      max_f = MINCORNERSPEED;
+    } else if (junc_cos < -0.999999) {
+      max_f = 1000000;
+    } else {
+      var sin_theta_d2 = sqrt(0.5 * (1.0 - junc_cos)); // Trig half angle identity. Always positive.
+      max_f = fmax( MINCORNERSPEED, (ucorner * ucorner* sin_theta_d2 / (1.0 - sin_theta_d2) ));
+    }
+
+
+  }
+  curr.maxs=min(curr.fn,lastf);
+  curr.maxs=min(curr.maxs,max_f);
+  lastf=curr.fn;
+  backforward();
+}
+
+var lastx=0;
+var lasty=0;
+
+function addmove(fn,x2,y2,z2,g0,rel) {
+  //fn=min(fn,maxf[4]);
+  var curr=move[nextbuff(head)];
+  if (rel) {
+    x2+=x1;
+    y2+=y1;
+    z2+=z1;
+  }
+  copy(lastmm,currmm);
+  mmdis=[0,0,0];
+  currmm[0]=mmdis[0] = (x2 - x1);
+  currmm[1]=mmdis[1] = (y2 - y1);
+  currmm[2]=mmdis[2] = (z2 - z1);
+  var dx=[];
+  dx[0]=int(x2*stepmm)-int(x1*stepmm);
+  dx[1]=int(y2*stepmm)-int(y1*stepmm);
+  dx[2]=int(z2*stepmm)-int(z1*stepmm);
+
+
+  curr.dis = sqrt(sqr2(mmdis[0]) + sqr2(mmdis[1]) + sqr2(mmdis[2]));
+  dd=0;
+  faxis=0;
+  for (var i=0;i<3;i++){
+    var d=Math.abs(dx[i]);
+	if (d>dd){
+      dd=d;
+      faxis=i;
+    }
+  }
+
+  head=nextbuff(head);
+  curr.fn=fn;
+  curr.dx=dx;
+  curr.fs=MINCORNERSPEED;
+  curr.fe=MINCORNERSPEED;
+  curr.status=g0?8:0;
+  curr.x1=x1;
+  curr.y1=y1;
+  curr.z1=z1;
+  curr.mmdis=[...mmdis];
+  curr.faxis=faxis;
+  
+  curr.delta=deltaV2(curr.dis)-0.001;
+  curr.status|=1;
+  planner(head);
+  x1=x2;
+  y1=y2;
+  z1=z2;
+
+}
+
+var GX=[0,0,0,0];
+function bresenham(ix){
+  if ((mcx[ix] -= bsdx[ix]) < 0) {
+    cmd0 |=2<<ix;	
+    mcx[ix] += totalstep;
+	GX[ix]+=sx[ix];
+	
+	
+  }
+}
+
+var lsteps=0;
+var mi=0;
+function machinemove(sg,dis,vel){
+}
+
+// curveloop is iterating each timestep (i set 0.001 sec) for changing velocity from constant jerk
+// by change the initial a1x,a2 we can use this function for all 7 segment
+// this mean the velocity only will change each 0.001 sec
+// then in this timestep it check the lastS versus currentS in motor stepper steps
+// it will move the motor (currentS - lastS) steps with current velocity
+
+
+
+
+var mvjerk=0;
+var mvtstep=0;
+var mvtlaps=0;
+var mvfscale=0;
+var mvaccel=0;
+var mvfeed=0;
+var mvlfeed=0;
+var mvok=0;
+var mvjerkup=0;
+var mvjerkdn=0;
+var mvtgfeed=0;
+var mvtgaccel=0;
+var mvdis=0;
+var imvdis=0;
+var mvmmtostep=0;
+var mvdscale=0;
+var lv;
+function curveloop(steps,v2){
+    var v1=lv;
+    var f=v1;
+    var fs=(v2-v1)/(steps);
+    //f+=fs*0.5;
+    while(steps && mctr){
+        cmd0=1;
+	    f+=fs;
+    	dlp=int(stepdiv2/f); // T = CPU_CLOCK/Vel
+        bresenham(0);
+        bresenham(1);
+	    cmd0 |= dlp << 5; // cmd0 is 32bit data contain all motor movement and the timing
+	    pushcmd();
+	    // lets save the data for display too
+	    vv.push([f,mi,GX[0],GX[1]]);
+	    steps--;
+	    mctr--;
+    }
+    lv=f;
+}
+var pv1,paccel,pjerk,pfscale,ptc,ptjc,pistep,ptstep,phjerk,pjerkdn,phaccel,pvjerk,psjerk,ptloop,ptrjerk=0;
+var timestep=0.002;
+var ldis=0;
+var aclimit=1.2;
+var pmode=0;
+var lv=0;
+function preparemotion(v1,v2,dis,accel,jerk){
+
+    delta=v2-v1;
+    pv1=v1;
+    ldis=0;
+    lv=v1;
+    if (fabs(delta)<0.001){ // cruising velocity
+        pmode=0;
+        ptc=fabs(dis)/pv1;
+        pistep=parseInt(ptc/(timestep))+1; // make sure the loop is in int
+        ptstep=ptc/pistep;
+    } else {  // non linear
+        pmode=1;
+        paccel=accel;
+        pjerk=jerk;
+        ptc=fabs(delta)/paccel;
+        ptjc=min(ptc/2,paccel/pjerk);
+        c=ptc/(ptc-ptjc); // to make sure the jerk version will arrive at same speed at same time as constant acceleration
+	    if (c>aclimit){ //we need to adjust so accel scale factor is no more than 1.5
+		    c=aclimit;
+		    ptjc=(c*ptc-ptc)/c;
+	    }
+
+        pjerk=paccel/ptjc; // new jerk value based on jerk
+        pjerkdn=ptc-ptjc;
+	    pfscale=c;
+        if (v2<v1){
+            pjerk=-pjerk;
+            paccel=-paccel;
+        }
+
+        pistep=int(ptc/timestep)+1; // make sure the loop is in int
+        ptstep=ptc/pistep;
+        phjerk=0.5*pjerk;
+        phaccel=0.5*paccel;
+        pvjerk=phjerk*sqr(ptjc);
+        psjerk=0.3333*pvjerk*ptjc;
+        ptrjerk=0.16667*pjerk;
+
+    }
+    ptloop=0;
+
+}
+
+function pmotionloop(dismax,bresen){
+    var v;
+    var cs;
+    if (pistep-->0){
+        ptloop+=ptstep;
+        var v,cs;
+        if (pmode==0){
+            // cruising
+            v=pv1;
+        	cs=pv1*ptloop;
+        } else {
+            // non constant velocity
+            if ((t1=ptloop-ptjc)>0){
+		        v=pvjerk+paccel*t1;
+		        cs=psjerk+(pvjerk+phaccel*t1)*t1;		
+	            if ((t2=ptloop-pjerkdn)>0){		    
+		            // jerk down
+		            cs-=(v1x=phjerk*t2*t2)*0.3333*t2;
+		            v-=v1x;    
+                }
+            } else {
+		         // jerk up
+            	cs=0.3333*(v=0.5*pjerk*ptloop*ptloop)*ptloop;
+	        }
+            
+            v=pv1+v*pfscale;
+            cs=pv1*ptloop+cs*pfscale;
+        }
+        
+	    if ((steps=int(cs*mvmmtostep)-int(ldis*mvmmtostep))>0){
+		    bresen(steps,v);
+		    ldis=cs;
+	    }
+        if (!mctr || !pistep){		    
+		    if (mctr)bresen(mctr,v);
+            print(laccelid,tail1,v,cs,totalstep,mctr,GX[0]/stepmm,GX[1]/stepmm);
+            ldis=dismax;
+            return 0;
+        } else
+        return 1;
+    } else return 0;
+}
+function coreloop1(){
+  if (mvnowok==0) return 0; // wait until some time	
+  if (cmdfull()) {
+    // zprintf(PSTR("F\n"));
+    return 1; // assume still in same path but actually no moving
+  } else   {
+    if (!mvok) return (mvok=startmove1());
+    else       return (mvok=pmotionloop(mvdisend,curveloop));
+  }
+}
+
+var lx1,ly1,lz1;
+lx1=ly1=lz1=0.0;
+var laccelid=-1;
+function startmove1(){
+    if ((head1 == tail1)) {
+        return 0;
+    }
+    var t = nextbuff1(tail1);
+	m=move1[t];
+	if (!m.ok)return 0; // not ready
+	
+	laxis = fastaxis;
+	fastaxis = m.faxis
+	var dx=[];
+    dx[0]=int(m.x12*stepmm)-int(lx1*stepmm);
+    dx[1]=int(m.y12*stepmm)-int(ly1*stepmm);
+    dx[2]=int(m.z12*stepmm)-int(lz1*stepmm);
+	mctr=totalstep = labs(dx[fastaxis]); // totalstep needed in bresenham
+	tail1 = t;
+	if (totalstep==0)return 0;
+    lx1=m.x12;
+    ly1=m.y12;
+    lz1=m.z12;
+	
+	
+	// global m
+	isG0 = m.status & 8;
+	
+	stepdiv = Math.floor(CLOCKCONSTANT* m.dis / totalstep);
+	mvmmtostep=fabs(stepmm*m.mmdis[fastaxis]/m.dis);
+	stepdiv2 = wstepdiv2 = stepdiv;
+	if (m.accelid==0 || m.accelid!=laccelid){
+		preparemotion(m.fs,m.fex,m.disx,accel,jerk);
+		laccelid=m.accelid;
+	}
+	mvdisend=m.disend;
+
+	if (f == 0)
+		nextmicros = micros();// if from stop
+
+	mctr2 = mcx[0] = mcx[1] = mcx[2] = mcx[3] = 0; //mctr >> 1;
+
+
+
+	for (var i = 0; i < 3; i++) {
+	    if (dx[i] > 0) {
+	      bsdx[i] = (dx[i]);
+	      sx[i] = 1;
+	    } else {
+	      bsdx[i] = -(dx[i]);
+	      sx[i] = -1;
+	    }
+	}
+	var ff=max(m.fe,m.fs); // get fastest speed
+	newdircommand(!isG0 ? 255 : 0);
+	// laser
+	mi++;
+	return 1;
+
+}
+function startmove(force=0)
+{
+
+    if ((head == tail)) {
+        // we dont have any more moves
+        prepareall();
+        return 0;
+    }
+    // at least buffer1 need to have 3 slot available
+    //if (!force && bufflen1()<=1)return 0;
+    var t = nextbuff(tail);
+	m=move[t];
+
+    prepareramp(t);
+    tail=t;
+	if (m.dis==0)return 0;
+	return 1;
+}
+// ===================================================================================
+// MAIN CODE
+// ===================================================================================
+
+var tm=0;
+var GS=12;
+var GSX=100;
+var GrY=c.height;
+var GrX=40;
+var xmax=0;
+var xmin=0;
+var ldemo=0;
+function dodemo(){
+    aclimit=getvalue("iacx")*1;
+    timestep=getvalue("tst")*1;
+	// reset simulation
+	GS=getvalue("igs")*1;
+	GSX=getvalue("igsx")*1;
+	mvnowok=0;
+	accelid=0;
+	laccelid=-1;
+	head=0;
+	tail=0;
+	head1=0;
+	tail1=0;
+	head2=-1;
+	tail2=-1;
+	tailok=0;
+	tailok1=0;
+	cmhead=0;
+	cmtail=0;
+	vv=[];
+	mvok=0;
+	GX=[0,0,0,0];
+	nextacc=0;
+	curracc=0;
+	prevacc=0;
+	cmddelay=[];
+	mvaccel=0;
+	ddd=[];
+	f=0;
+	x1=0;
+	y1=0;
+	z1=0;
+	lx1=0;
+	ly1=0;
+	lz1=0;
+	mi=0;
+    mvfeed=0;
+    mvfscale=1;
+    mvlfeed=0;
+	
+	lastf=MINCORNERSPEED;
+
+	ctx.clearRect(0,0,1000,1000);
+	demo=getvalue("idemo");
+	feed=getvalue("ifeed")*1;
+	accel=getvalue("iacc")*1;
+	jerk=getvalue("ijerk")*1;
+	zaccel=accel;
+	xycorner=getvalue("icorner")*1;
+	zcorner=xycorner;
+	if (ldemo!=demo){
+        xmax=0;
+        xmin=0;
+        ldemo=demo;
+    }
+	if (demo=="box"){
+		addmove(feed,100,0,0,0);
+		addmove(feed,100,100,0,0);
+		addmove(feed,0,100,0,0);
+		addmove(feed,0,0,0,0);
+	}
+	if (demo=="line"){
+		/*addmove(feed,10,5,0,0);
+		addmove(feed,20,10,0,0);
+		addmove(feed,20,25,0,0);
+		addmove(feed,20,40,0,0);
+		*/
+		addmove(feed,50,0,0,0);
+		addmove(feed,20,50,0,0);
+		addmove(feed,0,20,0,0);
+		addmove(feed,0,00,0,0);
+	}
+	if (demo=="circle"){
+	  for(var x=0;x<10;x++){
+		var d=x*3.14/5;
+		var r=5;
+		addmove(feed, Math.sin(d)*r, Math.cos(d)*r, 0, 0);
+	  }
+		for (var x = 1; x < 36; x++) {
+		//  addmove(feed, Math.sin(x/5.70)*30, Math.cos(x/5.70)*30, 0*Math.cos(x/5.70)*30, 0*Math.sin(x/5.70)*30,0);
+	  	}
+	  
+		addmove(feed, 0, 0, 0, 0);
+	}
+
+	ss=2.0/stepmm;
+	var ox=0;oy=0;
+	var xi=0;
+	var colors=["red","black","blue","green"];
+	//return;
+	var maxl=5;
+	while (startmove(1)){}
+	while (1){
+		//startmove(1);
+		xi++;
+		
+		while (coreloop1()){
+			maxl=25;
+		};
+		if(mvok==0)maxl--;
+		if (maxl==0)break;
+	}
+
+	var cmdly,cmcmd;
+	function decodecmd()
+	{
+	  if (cmdempty()) {
+
+		return 0;
+
+	  }
+	  var cmd = cmddelay[cmtail];
+	  cmtail = nextbuffm(cmtail);
+	  cmcmd = cmd & 1;
+	  if (cmcmd) {
+		cmbit = (cmd >> 1) & 15;
+		cmdly = (cmd >> 5);
+	  } else {
+		cmbit = (cmd >> 1) & 255;
+		cmdly = 20;
+	  }
+	  return 1;
+	}
+
+		
+	ff=0;
+
+	function drawF(intp,c,mask,ZY){
+		x=GrX;
+		var ni=0;
+		cmtail=0;
+		var stepd=CLOCKCONSTANT/stepmm;
+		var ldly=0;
+		var ox=-100000;
+		var oy=0;
+		var oi=-1;
+		var xx=[];
+		var yy=[];
+		var aa=[];
+		
+		var tm=0;
+	    xsc=xmax>0?110/(xmax-xmin):1;
+	    xct=xsc*(xmax-xmin)/2;
+	    lv=0;
+	    lt=0;
+		while (decodecmd()){
+			if (cmcmd){
+				ldly+=cmdly;
+				f=8*CLOCKCONSTANT/(cmdly*stepmm); 
+				v=vv[ni++];
+				tm+=cmdly*0.0001;
+				x+=cmdly*GSX/(CLOCKCONSTANT);
+				xx.push(tm);
+				yy.push(v[0]);
+				aa.push((v[0]-lv)*1000/(tm-lt));
+				
+				lv=v[0];
+				lt=tm;
+			    x=v[2]*ss;
+			    y=v[3]*ss;
+			    if (ni&7==7){
+				    
+				    if (ox>-100000){
+				        ctx.beginPath();
+				        ctx.lineWidth=2;
+				        ctx.strokeStyle=colors[v[1] & 3];
+				        ctx.moveTo(xct+xsc*ox,250+xsc*oy);
+				        ctx.lineTo(xct+xsc*x,250+xsc*y);
+				        ctx.stroke();
+				        xmax=max(xmax,x);
+				        xmin=min(xmin,x);
+                    }				    
+			        ox=x;
+			        oy=y;
+			    }
+			}// else 	ldly+=cmdly;
+		}
+		var trace3 = {
+          x: xx,
+          y: yy,
+          name: 'V',
+          mode: 'lines'
+        };
+		var trace2 = {
+          x: xx,
+          y: aa,
+          name: 'A',
+          mode: 'lines'
+        };
+
+
+        var data = [trace2,trace3 ];
+
+        var layout = {
+          title:'S-curve Graph'
+        };
+
+        Plotly.newPlot('drw1', data, layout);
+	}
+
+
+	drawF(0,"green",2,0);
+	//drawF(1,"red",2,0);
+
+}
+//dodemo();
+
+</script>
+</body>
+</html>
