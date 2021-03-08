@@ -5,11 +5,15 @@ Implement path planning (using trapezoid planning) and execute using constant je
 
 The file contain some function for adding path to the system, and to start the motion loop.
 
-// trapezoid planner, level 1
+```
+# trapezoid planner, level 1
 addmove(speed,xtarget,ytarget,ztarget);
 startmove(); // this will start planning the path and store to level 2 buffer 
 =====================
+```
 
-// constant jerk buffer, level 2
+```
+# constant jerk buffer, level 2
 startmove1(); // actual start move
 coreloop1(); // call to iterate motion based on time steps, automatically call the startmove1 if a path has ended its motion loop.
+```
